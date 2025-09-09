@@ -1,13 +1,42 @@
 import streamlit as st
 import cv2
 import numpy as np
-from cvzone.SelfiSegmentationModule import SelfiSegmentation
 import os
 from PIL import Image
 import tempfile
 
-# Initialize the segmentor
-segmentor = SelfiSegmentation()
+# Function to create a mask for the person in the image using simple color thresholding
+def create_person_mask(img):
+    # Convert PIL image to OpenCV format
+    if isinstance(img, Image.Image):
+        img = np.array(img)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    
+    # Convert to HSV color space
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    
+    # Define range for skin color in HSV
+    lower_skin = np.array([0, 20, 70], dtype=np.uint8)
+    upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+    
+    # Create mask for skin color
+    mask = cv2.inRange(hsv, lower_skin, upper_skin)
+    
+    # Apply morphological operations to clean up the mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    
+    # Find contours and create a more refined mask
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Create a refined mask with only the largest contour (assuming it's the person)
+    refined_mask = np.zeros_like(mask)
+    if contours:
+        largest_contour = max(contours, key=cv2.contourArea)
+        cv2.fillPoly(refined_mask, [largest_contour], 255)
+    
+    return refined_mask
 
 # Function to process image with background removal
 def remove_background(img, background_option, background_image=None, blur_strength=15):
@@ -16,10 +45,13 @@ def remove_background(img, background_option, background_image=None, blur_streng
         img = np.array(img)
         img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     
+    # Create person mask
+    mask = create_person_mask(img)
+    
     # Create background based on option
     if background_option == "Solid Color":
         # Default solid color (purple)
-        bg = (255, 0, 255)
+        bg = np.full_like(img, (255, 0, 255))
     elif background_option == "Blur":
         # Create blurred background
         bg = cv2.GaussianBlur(img, (blur_strength, blur_strength), 0)
@@ -32,10 +64,11 @@ def remove_background(img, background_option, background_image=None, blur_streng
             bg = cv2.cvtColor(bg, cv2.COLOR_RGB2BGR)
     else:
         # Default to solid color if no valid option
-        bg = (255, 0, 255)
+        bg = np.full_like(img, (255, 0, 255))
     
-    # Remove background
-    img_out = segmentor.removeBG(img, bg, cutThreshold=0.8)
+    # Apply mask to combine foreground and background
+    mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    img_out = np.where(mask_3channel == 255, img, bg)
     
     # Convert back to RGB for displaying in Streamlit
     img_out = cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB)
@@ -56,7 +89,7 @@ def main():
     
     # Additional options based on selection
     if background_option == "Blur":
-        blur_strength = st.sidebar.slider("Blur Strength", 5, 15, step=2)
+        blur_strength = st.sidebar.slider("Blur Strength", 5, 51, 15, step=2)
     elif background_option == "Image":
         background_image_file = st.sidebar.file_uploader("Upload background image", type=["jpg", "jpeg", "png"])
         background_image = None
