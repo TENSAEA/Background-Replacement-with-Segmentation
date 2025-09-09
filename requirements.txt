@@ -8,7 +8,7 @@ cffi==2.0.0
 charset-normalizer==3.4.3
 click==8.2.1
 contourpy==1.3.2
-cvzone @ file:///home/tensu-hiwi/Documents/Projects/CV%20FINAL/realtime-bg-remover/cvzone
+cvzone==1.3.3
 cycler==0.12.1
 flatbuffers==25.2.10
 fonttools==4.59.2
