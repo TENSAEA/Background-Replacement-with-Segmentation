@@ -1,5 +1,4 @@
 import streamlit as st
-import cv2
 import numpy as np
 import os
 from PIL import Image
@@ -7,71 +6,101 @@ import tempfile
 
 # Function to create a mask for the person in the image using simple color thresholding
 def create_person_mask(img):
-    # Convert PIL image to OpenCV format
+    # Convert PIL image to numpy array
     if isinstance(img, Image.Image):
         img = np.array(img)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     
     # Convert to HSV color space
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    # We'll use a simple approach with RGB values instead of converting to HSV
+    # This avoids the need for OpenCV
     
-    # Define range for skin color in HSV
-    lower_skin = np.array([0, 20, 70], dtype=np.uint8)
-    upper_skin = np.array([20, 255, 255], dtype=np.uint8)
+    # Define range for skin color in RGB (approximate)
+    # These values might need adjustment based on the images
+    lower_skin = np.array([50, 40, 30], dtype=np.uint8)
+    upper_skin = np.array([255, 200, 180], dtype=np.uint8)
     
     # Create mask for skin color
-    mask = cv2.inRange(hsv, lower_skin, upper_skin)
+    mask = np.all((img >= lower_skin) & (img <= upper_skin), axis=2)
+    
+    # Convert boolean mask to uint8 (0 or 255)
+    mask = mask.astype(np.uint8) * 255
     
     # Apply morphological operations to clean up the mask
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    # Simple erosion and dilation using scipy
+    from scipy import ndimage
     
-    # Find contours and create a more refined mask
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # Erosion
+    mask = ndimage.binary_erosion(mask, iterations=2)
+    # Dilation
+    mask = ndimage.binary_dilation(mask, iterations=2)
     
-    # Create a refined mask with only the largest contour (assuming it's the person)
-    refined_mask = np.zeros_like(mask)
-    if contours:
-        largest_contour = max(contours, key=cv2.contourArea)
-        cv2.fillPoly(refined_mask, [largest_contour], 255)
+    # Convert back to uint8
+    mask = mask.astype(np.uint8) * 255
     
-    return refined_mask
+    return mask
+
+# Function to apply Gaussian blur to an image
+def gaussian_blur(img, blur_strength=15):
+    from scipy import ndimage
+    # Ensure blur_strength is odd
+    if blur_strength % 2 == 0:
+        blur_strength += 1
+    
+    # Apply Gaussian filter
+    if isinstance(img, Image.Image):
+        img = np.array(img)
+    
+    blurred = ndimage.gaussian_filter(img, sigma=blur_strength/3)
+    return blurred
 
 # Function to process image with background removal
 def remove_background(img, background_option, background_image=None, blur_strength=15):
-    # Convert PIL image to OpenCV format if needed
+    # Convert PIL image to numpy array if needed
     if isinstance(img, Image.Image):
-        img = np.array(img)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        img_array = np.array(img)
+    else:
+        img_array = img
     
     # Create person mask
     mask = create_person_mask(img)
     
+    # Ensure mask has the same dimensions as the image
+    if mask.shape[:2] != img_array.shape[:2]:
+        # Resize mask to match image
+        from PIL import Image as PILImage
+        mask_pil = PILImage.fromarray(mask)
+        mask_pil = mask_pil.resize((img_array.shape[1], img_array.shape[0]), PILImage.NEAREST)
+        mask = np.array(mask_pil)
+    
     # Create background based on option
     if background_option == "Solid Color":
         # Default solid color (purple)
-        bg = np.full_like(img, (255, 0, 255))
+        bg = np.full_like(img_array, (255, 0, 255), dtype=np.uint8)
     elif background_option == "Blur":
         # Create blurred background
-        bg = cv2.GaussianBlur(img, (blur_strength, blur_strength), 0)
+        bg = gaussian_blur(img_array, blur_strength)
     elif background_option == "Image" and background_image is not None:
         # Resize background image to match input image
-        bg = cv2.resize(np.array(background_image), (img.shape[1], img.shape[0]))
-        # Convert PIL to OpenCV if needed
-        if isinstance(bg, Image.Image):
-            bg = np.array(bg)
-            bg = cv2.cvtColor(bg, cv2.COLOR_RGB2BGR)
+        bg = np.array(background_image.resize((img_array.shape[1], img_array.shape[0])))
     else:
         # Default to solid color if no valid option
-        bg = np.full_like(img, (255, 0, 255))
+        bg = np.full_like(img_array, (255, 0, 255), dtype=np.uint8)
     
     # Apply mask to combine foreground and background
-    mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-    img_out = np.where(mask_3channel == 255, img, bg)
+    # Expand mask to 3 channels if needed
+    if mask.ndim == 2:
+        mask_3channel = np.stack([mask, mask, mask], axis=2)
+    else:
+        mask_3channel = mask
     
-    # Convert back to RGB for displaying in Streamlit
-    img_out = cv2.cvtColor(img_out, cv2.COLOR_BGR2RGB)
+    # Normalize mask to 0-1 range
+    mask_normalized = mask_3channel / 255.0
+    
+    # Blend the images
+    img_out = img_array * mask_normalized + bg * (1 - mask_normalized)
+    
+    # Convert to uint8
+    img_out = img_out.astype(np.uint8)
     
     return img_out
 
